@@ -53,7 +53,7 @@
   <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1 w-full flex flex-col gap-6">
 
     <!-- KPI Metrics -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
       <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
         <p class="text-xs font-medium text-slate-500">Matching Appearances</p>
         <p id="totalCasesCount" class="text-2xl font-bold text-slate-800 mt-1">0</p>
@@ -61,14 +61,6 @@
       <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
         <p class="text-xs font-medium text-slate-500">Archive Total In DB</p>
         <p id="dbTotalCount" class="text-2xl font-bold text-indigo-600 mt-1">...</p>
-      </div>
-      <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-        <p class="text-xs font-medium text-slate-500">Remote / Video Hearings</p>
-        <p id="remoteCasesCount" class="text-2xl font-bold text-sky-600 mt-1">0</p>
-      </div>
-      <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-        <p class="text-xs font-medium text-slate-500">In-Person Hearings</p>
-        <p id="personCasesCount" class="text-2xl font-bold text-amber-600 mt-1">0</p>
       </div>
     </div>
 
@@ -281,19 +273,6 @@
       const countRes = await conn.query(`SELECT count(*) as cnt FROM dockets ${where}`);
       currentTotal = Number(countRes.toArray()[0].cnt);
       document.getElementById('totalCasesCount').innerText = currentTotal.toLocaleString();
-
-      // Get remote vs person breakdown using CAST AS INTEGER for clean JS number conversion
-      const kpiRes = await conn.query(`
-        SELECT 
-          CAST(count(CASE WHEN lower(method_of_attendance) LIKE '%video%' OR lower(method_of_attendance) LIKE '%teleconference%' OR lower(method_of_attendance) LIKE '%zoom%' OR lower(method_of_attendance) LIKE '%teams%' THEN 1 END) AS INTEGER) as remote_cnt,
-          CAST(count(CASE WHEN lower(method_of_attendance) LIKE '%attendance%' OR lower(method_of_attendance) LIKE '%in person%' OR lower(method_of_attendance) LIKE '%hybrid%' THEN 1 END) AS INTEGER) as person_cnt
-        FROM dockets ${where}
-      `);
-      const kpis = kpiRes.toArray()[0];
-      const remoteVal = typeof kpis.remote_cnt === 'bigint' ? Number(kpis.remote_cnt) : (Number(kpis.remote_cnt) || 0);
-      const personVal = typeof kpis.person_cnt === 'bigint' ? Number(kpis.person_cnt) : (Number(kpis.person_cnt) || 0);
-      document.getElementById('remoteCasesCount').innerText = remoteVal.toLocaleString();
-      document.getElementById('personCasesCount').innerText = personVal.toLocaleString();
 
       // Fetch current page data
       const offset = (currentPage - 1) * pageSize;
