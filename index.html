@@ -3,15 +3,17 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Ontario Daily Court Lists Search Dashboard</title>
-  <!-- Tailwind CSS CDN -->
+  <title>Ontario Court Dockets - Historical Search Archive</title>
+  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- PapaParse for CSV parsing -->
-  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <!-- DuckDB-Wasm CDN -->
+  <script type="module">
+    import * as duckdb from 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/+esm';
+    window.duckdb = duckdb;
+  </script>
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
   <style>
-    [x-cloak] { display: none !important; }
     .badge-remote { background-color: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd; }
     .badge-person { background-color: #fef3c7; color: #b45309; border: 1px solid #fde68a; }
   </style>
@@ -23,36 +25,42 @@
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
       <div class="flex items-center space-x-3">
         <div class="p-2.5 bg-indigo-600 text-white rounded-xl shadow-sm">
-          <i data-lucide="scale" class="w-6 h-6"></i>
+          <i data-lucide="database" class="w-6 h-6"></i>
         </div>
         <div>
-          <h1 class="text-xl font-bold tracking-tight text-slate-900">Ontario Daily Court Lists</h1>
-          <p class="text-xs text-slate-500">Live docket directory &amp; appearances across Ontario Superior &amp; Ontario Courts of Justice</p>
+          <div class="flex items-center gap-2">
+            <h1 class="text-xl font-bold tracking-tight text-slate-900">Ontario Court Dockets Archive</h1>
+            <span class="bg-emerald-100 text-emerald-800 text-xs px-2 py-0.5 rounded-full font-semibold border border-emerald-200">
+              DuckDB-Wasm Engine
+            </span>
+          </div>
+          <p class="text-xs text-slate-500">Historical database across Superior Court &amp; Ontario Court of Justice appearances</p>
         </div>
       </div>
       <div class="flex items-center gap-3">
-        <span id="lastUpdated" class="text-xs text-slate-500 bg-slate-100 px-3 py-1.5 rounded-full border border-slate-200">
-          Loading data...
+        <span id="engineStatus" class="inline-flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 px-3 py-1.5 rounded-full border border-amber-200 font-medium">
+          <span class="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+          Initializing in-browser SQL engine...
         </span>
         <button id="exportCsvBtn" class="inline-flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-3.5 py-2 rounded-lg transition-colors shadow-sm">
-          <i data-lucide="download" class="w-4 h-4"></i> Export CSV
+          <i data-lucide="download" class="w-4 h-4"></i> Export Results
         </button>
       </div>
     </div>
   </header>
 
-  <!-- Main Content -->
+  <!-- Main Container -->
   <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1 w-full flex flex-col gap-6">
 
-    <!-- KPI Cards -->
+    <!-- KPI Metrics -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
       <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-        <p class="text-xs font-medium text-slate-500">Matching Cases</p>
+        <p class="text-xs font-medium text-slate-500">Matching Appearances</p>
         <p id="totalCasesCount" class="text-2xl font-bold text-slate-800 mt-1">0</p>
       </div>
       <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-        <p class="text-xs font-medium text-slate-500">Municipalities</p>
-        <p id="totalCitiesCount" class="text-2xl font-bold text-slate-800 mt-1">0</p>
+        <p class="text-xs font-medium text-slate-500">Archive Total In DB</p>
+        <p id="dbTotalCount" class="text-2xl font-bold text-indigo-600 mt-1">...</p>
       </div>
       <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
         <p class="text-xs font-medium text-slate-500">Remote / Video Hearings</p>
@@ -64,7 +72,7 @@
       </div>
     </div>
 
-    <!-- Filters Section -->
+    <!-- Search & Filter Controls -->
     <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-3">
       <!-- Search Input -->
       <div class="flex-1 relative">
@@ -74,72 +82,63 @@
         <input
           type="text"
           id="searchInput"
-          placeholder="Search by party name, case number, short title, or event type..."
-          class="block w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+          placeholder="Search by party name, case number, short title, or room across entire archive..."
+          class="block w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg text-sm bg-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
         />
       </div>
 
-      <!-- City Filter -->
+      <!-- City Dropdown -->
       <div class="w-full md:w-52">
-        <select
-          id="cityFilter"
-          class="block w-full py-2 px-3 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-        >
+        <select id="cityFilter" class="block w-full py-2 px-3 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
           <option value="">All Municipalities</option>
         </select>
       </div>
 
-      <!-- Court Filter -->
+      <!-- Court Dropdown -->
       <div class="w-full md:w-56">
-        <select
-          id="courtFilter"
-          class="block w-full py-2 px-3 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-        >
+        <select id="courtFilter" class="block w-full py-2 px-3 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
           <option value="">All Courts</option>
           <option value="Superior Court of Justice">Superior Court of Justice</option>
           <option value="Ontario Court of Justice">Ontario Court of Justice</option>
         </select>
       </div>
 
-      <!-- Attendance Filter -->
+      <!-- Attendance Dropdown -->
       <div class="w-full md:w-48">
-        <select
-          id="methodFilter"
-          class="block w-full py-2 px-3 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-        >
+        <select id="methodFilter" class="block w-full py-2 px-3 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
           <option value="">All Attendance Types</option>
-          <option value="remote">Remote (Video/Phone)</option>
-          <option value="person">In-Person / Attendance</option>
+          <option value="remote">Remote (Video/Zoom/Phone)</option>
+          <option value="person">In-Person</option>
           <option value="hybrid">Hybrid</option>
         </select>
       </div>
     </div>
 
-    <!-- Results Table Card -->
+    <!-- Table Container -->
     <div class="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col flex-1 overflow-hidden">
       <div class="overflow-x-auto flex-1">
         <table class="min-w-full divide-y divide-slate-200 text-left text-sm">
           <thead class="bg-slate-50 text-slate-600 font-semibold text-xs tracking-wider uppercase">
             <tr>
-              <th scope="col" class="py-3 px-4">Court Date</th>
-              <th scope="col" class="py-3 px-4">Location &amp; Room</th>
+              <th scope="col" class="py-3 px-4">Docket Date</th>
+              <th scope="col" class="py-3 px-4">Municipality &amp; Room</th>
               <th scope="col" class="py-3 px-4">Time</th>
               <th scope="col" class="py-3 px-4">Party Name</th>
               <th scope="col" class="py-3 px-4">Case Number</th>
-              <th scope="col" class="py-3 px-4">Proceeding / Title</th>
+              <th scope="col" class="py-3 px-4">Short Title / Case Name</th>
               <th scope="col" class="py-3 px-4">Event Type</th>
               <th scope="col" class="py-3 px-4">Attendance</th>
             </tr>
           </thead>
           <tbody id="tableBody" class="divide-y divide-slate-100 bg-white text-slate-700">
             <tr>
-              <td colspan="8" class="text-center py-12 text-slate-400">Loading court records...</td>
+              <td colspan="8" class="text-center py-12 text-slate-400">Loading DuckDB database archive...</td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <!-- Pagination -->
+      <!-- Pagination Footer -->
       <div class="border-t border-slate-200 px-4 py-3 bg-slate-50 flex items-center justify-between text-xs text-slate-500">
         <span id="pageInfo">Showing 0 of 0</span>
         <div class="flex items-center gap-2">
@@ -156,117 +155,172 @@
   </main>
 
   <footer class="bg-white border-t border-slate-200 py-4 text-center text-xs text-slate-400">
-    Automated scraper pipeline. Court list data sourced from <a href="https://www.ontariocourtdates.ca/daily-docket.aspx" target="_blank" class="text-indigo-600 underline hover:text-indigo-800">ontariocourtdates.ca</a>. General information only.
+    Ontario Court Dockets Search Engine powered by DuckDB-Wasm &amp; Parquet. Information sourced from ontariocourtdates.ca.
   </footer>
 
-  <script>
-    let allRecords = [];
-    let filteredRecords = [];
+  <script type="module">
+    import * as duckdb from 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.28.0/+esm';
+
+    let conn = null;
+    let currentTotal = 0;
     let currentPage = 1;
     const pageSize = 50;
+    let queryDebounce = null;
 
-    // Load CSV file
-    async function loadData() {
+    async function initDuckDB() {
       try {
-        const response = await fetch('data/latest.csv');
-        if (!response.ok) throw new Error('Data file not available');
-        const csvText = await response.text();
+        const JSDELIVR_BUNDLES = duckdb.getJsDelivrBundles();
+        const bundle = await duckdb.selectBundle(JSDELIVR_BUNDLES);
 
-        Papa.parse(csvText, {
-          header: true,
-          skipEmptyLines: true,
-          complete: function(results) {
-            allRecords = results.data;
-            initCityDropdown();
-            applyFilters();
-            if (allRecords.length > 0 && allRecords[0].date_text) {
-              document.getElementById('lastUpdated').innerText = 'Docket Date: ' + allRecords[0].date_text;
-            } else {
-              document.getElementById('lastUpdated').innerText = 'Records Loaded';
-            }
-          }
-        });
+        const worker_url = URL.createObjectURL(
+          new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' })
+        );
+
+        // Instantiate worker and database
+        const worker = new Worker(worker_url);
+        const logger = new duckdb.VoidLogger();
+        const db = new duckdb.AsyncDuckDB(logger, worker);
+        await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+        URL.revokeObjectURL(worker_url);
+
+        conn = await db.connect();
+
+        // Register the parquet archive into virtual filesystem
+        document.getElementById('engineStatus').innerHTML = `
+          <span class="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+          Mounting Parquet dataset...
+        `;
+
+        const parquetRes = await fetch('data/dockets_archive.parquet');
+        if (!parquetRes.ok) throw new Error('Parquet file missing');
+        const buffer = await parquetRes.arrayBuffer();
+        await db.registerFileBuffer('dockets.parquet', new Uint8Array(buffer));
+
+        // Create view for querying
+        await conn.query(`CREATE VIEW dockets AS SELECT * FROM read_parquet('dockets.parquet')`);
+
+        // Check total count
+        const countRes = await conn.query(`SELECT count(*) as cnt FROM dockets`);
+        const totalInDb = Number(countRes.toArray()[0].cnt);
+        document.getElementById('dbTotalCount').innerText = totalInDb.toLocaleString();
+
+        document.getElementById('engineStatus').className = "inline-flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-200 font-medium";
+        document.getElementById('engineStatus').innerHTML = `
+          <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+          Ready (${totalInDb.toLocaleString()} records indexed)
+        `;
+
+        // Populate Cities dropdown
+        const citiesRes = await conn.query(`SELECT DISTINCT city FROM dockets WHERE city IS NOT NULL ORDER BY city ASC`);
+        const citySelect = document.getElementById('cityFilter');
+        for (const row of citiesRes.toArray()) {
+          const opt = document.createElement('option');
+          opt.value = row.city;
+          opt.textContent = row.city;
+          citySelect.appendChild(opt);
+        }
+
+        // Run initial query
+        await runQuery();
+
       } catch (err) {
+        console.error("DuckDB initialization failed:", err);
+        document.getElementById('engineStatus').className = "inline-flex items-center gap-1.5 text-xs text-rose-700 bg-rose-50 px-3 py-1.5 rounded-full border border-rose-200 font-medium";
+        document.getElementById('engineStatus').innerText = "Database load failed";
         document.getElementById('tableBody').innerHTML = `
           <tr>
             <td colspan="8" class="text-center py-12 text-rose-500">
-              Failed to load court docket data. Please ensure <code>data/latest.csv</code> exists in the repository.
+              Failed to load parquet archive: ${err.message}. Please verify <code>data/dockets_archive.parquet</code> is available.
             </td>
           </tr>
         `;
       }
     }
 
-    function initCityDropdown() {
-      const cities = [...new Set(allRecords.map(r => r.city).filter(Boolean))].sort();
-      const citySelect = document.getElementById('cityFilter');
-      cities.forEach(city => {
-        const opt = document.createElement('option');
-        opt.value = city;
-        opt.textContent = city;
-        citySelect.appendChild(opt);
-      });
-    }
+    function buildWhereClause() {
+      const q = document.getElementById('searchInput').value.trim().replace(/'/g, "''");
+      const city = document.getElementById('cityFilter').value.replace(/'/g, "''");
+      const court = document.getElementById('courtFilter').value.replace(/'/g, "''");
+      const method = document.getElementById('methodFilter').value;
 
-    function applyFilters() {
-      const q = document.getElementById('searchInput').value.toLowerCase().trim();
-      const selectedCity = document.getElementById('cityFilter').value;
-      const selectedCourt = document.getElementById('courtFilter').value;
-      const selectedMethod = document.getElementById('methodFilter').value;
+      const clauses = [];
 
-      filteredRecords = allRecords.filter(r => {
-        if (selectedCity && r.city !== selectedCity) return false;
-        if (selectedCourt && r.court !== selectedCourt) return false;
+      if (city) clauses.push(`city = '${city}'`);
+      if (court) clauses.push(`court = '${court}'`);
 
-        if (selectedMethod) {
-          const methodStr = (r.method_of_attendance || '').toLowerCase();
-          if (selectedMethod === 'remote' && !methodStr.includes('video') && !methodStr.includes('phone') && !methodStr.includes('teleconference')) return false;
-          if (selectedMethod === 'person' && !methodStr.includes('attendance') && !methodStr.includes('in person')) return false;
-          if (selectedMethod === 'hybrid' && !methodStr.includes('hybrid')) return false;
+      if (method === 'remote') {
+        clauses.push(`(lower(method_of_attendance) LIKE '%video%' OR lower(method_of_attendance) LIKE '%phone%' OR lower(method_of_attendance) LIKE '%teleconference%' OR lower(method_of_attendance) LIKE '%teams%')`);
+      } else if (method === 'person') {
+        clauses.push(`(lower(method_of_attendance) LIKE '%attendance%' OR lower(method_of_attendance) LIKE '%in person%')`);
+      } else if (method === 'hybrid') {
+        clauses.push(`lower(method_of_attendance) LIKE '%hybrid%'`);
+      }
+
+      if (q) {
+        const words = q.split(/\s+/).filter(Boolean);
+        for (const w of words) {
+          clauses.push(`(
+            lower(party_name) LIKE '%${w.toLowerCase()}%' OR
+            lower(case_number) LIKE '%${w.toLowerCase()}%' OR
+            lower(short_title) LIKE '%${w.toLowerCase()}%' OR
+            lower(event_type) LIKE '%${w.toLowerCase()}%' OR
+            lower(room) LIKE '%${w.toLowerCase()}%'
+          )`);
         }
+      }
 
-        if (q) {
-          const haystack = `${r.party_name} ${r.case_number} ${r.short_title} ${r.event_type} ${r.room} ${r.city}`.toLowerCase();
-          if (!haystack.includes(q)) return false;
-        }
-
-        return true;
-      });
-
-      currentPage = 1;
-      updateKPIs();
-      renderTable();
+      return clauses.length > 0 ? "WHERE " + clauses.join(" AND ") : "";
     }
 
-    function updateKPIs() {
-      document.getElementById('totalCasesCount').innerText = filteredRecords.length.toLocaleString();
-      const citiesCount = new Set(filteredRecords.map(r => r.city).filter(Boolean)).size;
-      document.getElementById('totalCitiesCount').innerText = citiesCount.toLocaleString();
+    async function runQuery() {
+      if (!conn) return;
 
-      const remoteCount = filteredRecords.filter(r => /video|zoom|teleconference|teams/i.test(r.method_of_attendance || '')).length;
-      document.getElementById('remoteCasesCount').innerText = remoteCount.toLocaleString();
+      const where = buildWhereClause();
 
-      const personCount = filteredRecords.filter(r => /attendance|in person|hybrid/i.test(r.method_of_attendance || '')).length;
-      document.getElementById('personCasesCount').innerText = personCount.toLocaleString();
+      // Get count
+      const countRes = await conn.query(`SELECT count(*) as cnt FROM dockets ${where}`);
+      currentTotal = Number(countRes.toArray()[0].cnt);
+      document.getElementById('totalCasesCount').innerText = currentTotal.toLocaleString();
+
+      // Get remote vs person breakdown
+      const kpiRes = await conn.query(`
+        SELECT 
+          sum(CASE WHEN lower(method_of_attendance) LIKE '%video%' OR lower(method_of_attendance) LIKE '%teleconference%' THEN 1 ELSE 0 END) as remote_cnt,
+          sum(CASE WHEN lower(method_of_attendance) LIKE '%attendance%' OR lower(method_of_attendance) LIKE '%in person%' THEN 1 ELSE 0 END) as person_cnt
+        FROM dockets ${where}
+      `);
+      const kpis = kpiRes.toArray()[0];
+      document.getElementById('remoteCasesCount').innerText = Number(kpis.remote_cnt || 0).toLocaleString();
+      document.getElementById('personCasesCount').innerText = Number(kpis.person_cnt || 0).toLocaleString();
+
+      // Fetch current page data
+      const offset = (currentPage - 1) * pageSize;
+      const dataRes = await conn.query(`
+        SELECT date_text, city, court, time, room, party_name, case_number, short_title, event_type, method_of_attendance 
+        FROM dockets 
+        ${where} 
+        ORDER BY date_text DESC, city ASC, party_name ASC 
+        LIMIT ${pageSize} OFFSET ${offset}
+      `);
+
+      renderRows(dataRes.toArray());
     }
 
-    function renderTable() {
+    function renderRows(rows) {
       const tbody = document.getElementById('tableBody');
-      const start = (currentPage - 1) * pageSize;
-      const end = start + pageSize;
-      const pageData = filteredRecords.slice(start, end);
 
-      if (pageData.length === 0) {
+      if (!rows || rows.length === 0) {
         tbody.innerHTML = `
           <tr>
             <td colspan="8" class="text-center py-12 text-slate-400">
-              No matching court appearances found.
+              No matching court appearances found across the archive.
             </td>
           </tr>
         `;
       } else {
-        tbody.innerHTML = pageData.map(r => {
-          const isRemote = /video|zoom|teleconference|teams/i.test(r.method_of_attendance || '');
+        tbody.innerHTML = rows.map(r => {
+          const methodStr = (r.method_of_attendance || '').toLowerCase();
+          const isRemote = methodStr.includes('video') || methodStr.includes('zoom') || methodStr.includes('teleconference');
           const badgeClass = isRemote ? 'badge-remote' : 'badge-person';
 
           return `
@@ -274,7 +328,7 @@
               <td class="py-3 px-4 font-mono text-xs text-slate-500 whitespace-nowrap">${escapeHtml(r.date_text || '')}</td>
               <td class="py-3 px-4">
                 <div class="font-semibold text-slate-800">${escapeHtml(r.city || '')}</div>
-                <div class="text-xs text-slate-400">${escapeHtml(r.room || 'Room not listed')}</div>
+                <div class="text-xs text-slate-400">${escapeHtml(r.room || 'Room not specified')}</div>
               </td>
               <td class="py-3 px-4 whitespace-nowrap font-medium text-slate-700">${escapeHtml(r.time || '')}</td>
               <td class="py-3 px-4 font-semibold text-slate-900">${escapeHtml(r.party_name || '')}</td>
@@ -291,10 +345,13 @@
         }).join('');
       }
 
-      // Update Pagination UI
-      const totalPages = Math.ceil(filteredRecords.length / pageSize) || 1;
-      document.getElementById('pageInfo').innerText = `Showing ${Math.min(start + 1, filteredRecords.length)} - ${Math.min(end, filteredRecords.length)} of ${filteredRecords.length.toLocaleString()}`;
-      document.getElementById('prevBtn').disabled = currentPage === 1;
+      // Update Pagination Info
+      const start = currentTotal > 0 ? (currentPage - 1) * pageSize + 1 : 0;
+      const end = Math.min(currentPage * pageSize, currentTotal);
+      const totalPages = Math.ceil(currentTotal / pageSize) || 1;
+
+      document.getElementById('pageInfo').innerText = `Showing ${start.toLocaleString()} - ${end.toLocaleString()} of ${currentTotal.toLocaleString()} appearances`;
+      document.getElementById('prevBtn').disabled = currentPage <= 1;
       document.getElementById('nextBtn').disabled = currentPage >= totalPages;
 
       if (window.lucide) {
@@ -312,44 +369,69 @@
         .replace(/'/g, '&#039;');
     }
 
-    // Export Filtered CSV
-    document.getElementById('exportCsvBtn').addEventListener('click', () => {
-      if (filteredRecords.length === 0) return alert('No records to export');
-      const csv = Papa.unparse(filteredRecords);
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `ontario_court_dockets_filtered_${new Date().toISOString().split('T')[0]}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    });
+    // Trigger debounced query
+    function triggerQuery() {
+      clearTimeout(queryDebounce);
+      queryDebounce = setTimeout(() => {
+        currentPage = 1;
+        runQuery();
+      }, 250);
+    }
 
-    // Event Listeners for Filters
-    document.getElementById('searchInput').addEventListener('input', applyFilters);
-    document.getElementById('cityFilter').addEventListener('change', applyFilters);
-    document.getElementById('courtFilter').addEventListener('change', applyFilters);
-    document.getElementById('methodFilter').addEventListener('change', applyFilters);
+    // Export query results
+    async function exportCSV() {
+      if (!conn || currentTotal === 0) return alert('No results to export.');
+      const where = buildWhereClause();
+      const res = await conn.query(`SELECT * FROM dockets ${where} LIMIT 50000`);
+      const rows = res.toArray();
+
+      if (rows.length === 0) return;
+      const headers = Object.keys(rows[0]);
+      const csvLines = [headers.join(",")];
+
+      for (const row of rows) {
+        const line = headers.map(h => {
+          let val = row[h] == null ? "" : String(row[h]);
+          val = val.replace(/"/g, '""');
+          return `"${val}"`;
+        }).join(",");
+        csvLines.push(line);
+      }
+
+      const blob = new Blob([csvLines.join("\n")], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `ontario_court_dockets_export_${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+
+    document.getElementById('searchInput').addEventListener('input', triggerQuery);
+    document.getElementById('cityFilter').addEventListener('change', triggerQuery);
+    document.getElementById('courtFilter').addEventListener('change', triggerQuery);
+    document.getElementById('methodFilter').addEventListener('change', triggerQuery);
+    document.getElementById('exportCsvBtn').addEventListener('click', exportCSV);
 
     document.getElementById('prevBtn').addEventListener('click', () => {
       if (currentPage > 1) {
         currentPage--;
-        renderTable();
+        runQuery();
       }
     });
 
     document.getElementById('nextBtn').addEventListener('click', () => {
-      const totalPages = Math.ceil(filteredRecords.length / pageSize);
+      const totalPages = Math.ceil(currentTotal / pageSize);
       if (currentPage < totalPages) {
         currentPage++;
-        renderTable();
+        runQuery();
       }
     });
 
     window.addEventListener('DOMContentLoaded', () => {
       lucide.createIcons();
-      loadData();
+      initDuckDB();
     });
   </script>
 </body>

@@ -284,12 +284,18 @@ def save_data(records: List[Dict[str, Any]], output_dir: str = "data") -> Dict[s
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_date ON dockets (date_text);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_case ON dockets (case_number);")
         conn.commit()
+
+        # Export high-compression deduplicated archive for DuckDB-Wasm in browser
+        archive_df = pd.read_sql("SELECT DISTINCT * FROM dockets", conn)
+        archive_parquet_path = os.path.join(output_dir, "dockets_archive.parquet")
+        archive_df.to_parquet(archive_parquet_path, compression="snappy", index=False)
         conn.close()
 
         logger.info(f"Data saved successfully:")
-        logger.info(f"  Excel:  {excel_path}")
-        logger.info(f"  CSV:    {csv_path}")
-        logger.info(f"  SQLite: {db_path}")
+        logger.info(f"  Excel:   {excel_path}")
+        logger.info(f"  CSV:     {csv_path}")
+        logger.info(f"  SQLite:  {db_path}")
+        logger.info(f"  Parquet: {archive_parquet_path} ({len(archive_df)} records)")
     else:
         logger.warning("No records scraped; empty files not saved.")
 
